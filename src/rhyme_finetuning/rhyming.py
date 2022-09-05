@@ -44,3 +44,31 @@ def get_phonemes(word: str, selection_criteria: Callable) -> List[Any]:
         return [p for p in ending if selection_criteria(p)]
     except KeyError:
         return []
+
+
+def stanza_rhymes(lines: List[str]) -> bool:
+    """
+    Check if given lines rhyme.
+    Expects preprocessed lines with no punctuation at the end of the lines.
+    Two lines: checks if AA
+    Four lines: checks if ABBA, ABAB, AABB or AAAA.
+    """
+    if not ((len(lines) == 4) or (len(lines) == 2)):
+        raise RuntimeError(
+            f'number of lines is not 2 or 4a')
+    last_words = [line.split(' ')[-1] for line in lines]
+    assert '' not in last_words and None not in last_words
+    if len(last_words) == 2:
+        return vowel_rhyme(last_words[0], last_words[1])
+    elif len(last_words) == 4:
+        abba = (vowel_rhyme(last_words[0], last_words[3]) and vowel_rhyme(
+            last_words[1], last_words[2]))
+        abab = (vowel_rhyme(last_words[0], last_words[2]) and vowel_rhyme(
+            last_words[1], last_words[3]))
+        aabb = (vowel_rhyme(last_words[0], last_words[1]) and vowel_rhyme(
+            last_words[2], last_words[3]))
+        return ((abab or abba) or aabb)
+
+    else:
+        raise RuntimeError(
+            f'something went wrong during preprocessing, rhyme checker got weird lines:\n{lines}')

@@ -17,7 +17,7 @@ with open('benchmark.txt') as file:
 start = time.perf_counter()
 rhyme_results = []
 for a, b in test_words:
-    rhyme_results.append(rhyme(a, b))
+    rhyme_results.append(vowel_rhyme(a, b))
 end = time.perf_counter()
 total = end-start
 
@@ -56,5 +56,5 @@ for words, rhymes in results:
     if rhymes is True:
         print(words)
 
-# Conclusion: prefect rhymes are way to restrictive
+# Conclusion: prefect rhymes are way too restrictive
 # %%
