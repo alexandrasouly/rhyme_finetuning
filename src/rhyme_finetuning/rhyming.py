@@ -1,7 +1,7 @@
 from typing import Any, Callable, List
 import nltk
 from itertools import dropwhile
-'''Credit to https://github.com/diego-vicente/dandelion for the logic'''
+'''Credit to https://github.com/diego-vicente/dandelion for parts of the logic'''
 
 nltk.download('cmudict')
 pronounciation = dict(nltk.corpus.cmudict.entries())
