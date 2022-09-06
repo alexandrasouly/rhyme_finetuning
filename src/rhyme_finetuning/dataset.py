@@ -1,5 +1,6 @@
 #%%
 from dataclasses import asdict, dataclass
+import transformers
 import pickle
 from typing import Callable, List, Optional
 import torch as t
@@ -20,6 +21,8 @@ class Stanza:
     text: str
     form: str
     processed_lines: List[str]
+    tokens: Optional[List[int]] = None
+    attention_mask: Optional[List[bool]] = None
 
     def pretty_print(self):
         print(f'{self.poem_title} ({self.form}):')
@@ -43,7 +46,8 @@ def process_line(line: str, strict: bool = False) -> Optional[str]:
 class PoemsDataset(t.utils.data.Dataset):
     def __init__(
         self,
-        # tokenizer: 
+        tokenizer: transformers.PreTrainedTokenizer,
+        max_length: int = 60,
         data_folder: str = "data/poems",
         stanza_filter: Callable[[List[str]], bool] = lambda x: True,
     ):
@@ -96,9 +100,27 @@ class PoemsDataset(t.utils.data.Dataset):
                 assert all(line[-1].isalpha() for line in processed_stanza), processed_stanza
                 if stanza_filter(processed_stanza):
                     self.stanzas.append(Stanza(poem.title, stanza, poem.form, processed_stanza))
+            
+            self._tokenize(tokenizer, max_length)
+            self._filter_length(max_length)
         
         print(f"Skipped {skipped} poems because they were not in English")
         print(f"Skipped languages: {languages}")
+    
+    def _filter_length(self, max_length: int):
+        prev_len = len(self)
+        self.stanzas = [stanza for stanza in self.stanzas if len(stanza.tokens) <= max_length]
+        print(f"{prev_len - len(self)} stanzas were too long and were removed")
+        assert all(len(stanza.tokens) == max_length for stanza in self.stanzas)
+
+    def _tokenize(self, tokenizer, max_length):
+        tokenizer.model_max_length = max_length
+        tokenizer.pad_token = tokenizer.eos_token
+        for stanza in self.stanzas:
+            tokenized = tokenizer(tokenizer.eos_token + stanza.text, padding="max_length")
+            
+            stanza.tokens = tokenized["input_ids"]
+            stanza.attention_mask = tokenized["attention_mask"]
 
     def __len__(self) -> int:
         return len(self.stanzas)
@@ -107,7 +129,7 @@ class PoemsDataset(t.utils.data.Dataset):
         return self.stanzas[idx]
     
     def save(self, path: str):
-        with open("../../data/stanzas.pkl", "wb") as f:
+        with open(path, "wb") as f:
             pickle.dump([asdict(stanza) for stanza in self.stanzas], f)
     
     def save_plaintext(self, path: str):
