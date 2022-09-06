@@ -1,71 +1,63 @@
-from typing import List, Tuple
-from einops import rearrange
-import torch as t
-import transformers
+#%%
 import argparse
-from tqdm import tqdm
+import datasets
+import transformers
 
-from rhyme_finetuning import PoemsDataset
-from rhyme_finetuning.dataset import Stanza
-
-device = "cuda" if t.cuda.is_available() else "cpu"
-
-def poem_collate_fn(batch: List[Stanza]) -> Tuple[t.Tensor, t.Tensor]:
-    # Extract tokens and convert list to tensor:
-    tokens = t.tensor([stanza.tokens for stanza in batch], dtype=t.long)
-    attention_masks = t.tensor([stanza.attention_mask for stanza in batch], dtype=t.float32)
-    assert len(tokens) == len(batch) == len(attention_masks)
-    return tokens, attention_masks
-
+#%%
 def train(args):
-    # Load the dataset
-    dataset = PoemsDataset.load(args.data_file)
+    dataset = datasets.load_dataset(
+        "text",
+        data_files={"train": args.train_file, "test": args.test_file},
+        sample_by="paragraph",
+    )
+    tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
+    tokenized_dataset = dataset.map(
+        lambda examples: tokenizer(examples["text"]),
+        batched=True,
+        num_proc=4,
+        remove_columns=["text"],
+    )
+    tokenizer.pad_token = tokenizer.eos_token
+    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False)
+    trainer_args = transformers.TrainingArguments(
+        output_dir="output",
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
+        evaluation_strategy="epoch",
+        logging_steps=10,
+        gradient_accumulation_steps=1,
+        num_train_epochs=args.epochs,
+        weight_decay=0.01,
+        lr_scheduler_type="linear",
+        learning_rate=args.lr,
+        save_steps=5_000,
+        push_to_hub=False,
+        report_to="wandb" if not args.no_track else "none",
+    )
+    #%%
 
-    # Create the model
     model = transformers.AutoModelForCausalLM.from_pretrained("gpt2")
 
-    # Create the dataloader
-    dataloader = t.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=poem_collate_fn)
+    #%%
+    trainer = transformers.Trainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=trainer_args,
+        data_collator=data_collator,
+        train_dataset=tokenized_dataset["train"],
+        eval_dataset=tokenized_dataset["test"],
+    )
 
-    # Create the optimizer
-    optimizer = t.optim.Adam(model.parameters(), lr=args.lr)
-
-    model.train()
-    model.to(device)
-    # Train the model
-    for epoch in range(args.epochs):
-        for input_ids, attention_masks in tqdm(dataloader):
-            optimizer.zero_grad()
-            assert input_ids.ndim == 2
-            assert input_ids.shape == attention_masks.shape
-            B, S = input_ids.shape
-            input_ids = input_ids.to(device)
-            attention_masks = attention_masks.to(device)
-            outputs = model(input_ids, attention_mask=attention_masks, labels=input_ids)
-            logits = outputs.logits
-            assert logits.ndim == 3
-            assert logits.shape[:2] == (B, S)
-            logits = logits[attention_masks == 1, :]
-            input_ids = input_ids[attention_masks == 1]
-            # logits = rearrange(logits, "b s v -> (b s) v")
-            # input_ids = rearrange(input_ids, "b s -> (b s)")
-            # TODO: We need to shift the labels!
-            loss = t.nn.functional.cross_entropy(logits, input_ids)
-            assert abs(loss.item() - outputs.loss.item()) < 1e-6, f"{loss.item()} != {outputs.loss.item()}"
-            loss.backward()
-            optimizer.step()
-            print(f"Loss: {loss.item()}")
-
-    # Save the model
-    # model.save_pretrained("trained_model")
-
-
+    trainer.train()
+# %%
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-file", type=str, default="data/stanzas_70.pkl")
+    parser.add_argument("--train-file", type=str, default="data/stanzas_train.txt")
+    parser.add_argument("--test-file", type=str, default="data/stanzas_test.txt")
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=3e-5)
+    parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--no-track", action="store_true")
     args = parser.parse_args()
 
     train(args)
