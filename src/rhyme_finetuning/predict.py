@@ -1,4 +1,5 @@
 # %%
+import torch as t
 import transformers
 
 # %%
@@ -25,6 +26,20 @@ def return_four_lines(pipe: transformers.pipeline):
     print('\n'+output3)
     return output1, output2, output3
 
+def get_samples(model, tokenizer, gen_kwargs, device):
+    queries = [
+        'Three rings for the elven kings high under the sky\n',
+        'To be or not to be: that is the question\n' ,
+        'His palms are sweaty, knees weak, arms heavy\n' 
+    ]
+    query_tensors = t.tensor(tokenizer(queries, padding="max_length", max_length=15, truncation=True)["input_ids"]).to(device)
+    response_tensors = model.generate(query_tensors, **gen_kwargs)
+    response_tensors = response_tensors[:, query_tensors.shape[1]:]
+
+    response_strs = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+    response_strs = [[q] + r.split('\n')[:3] for r, q in zip(response_strs, queries)]
+    response_strs = ['\n'.join(r) for r in response_strs]
+    return response_strs
 
 # %%
 if __name__ == '__main__':

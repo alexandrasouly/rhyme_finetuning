@@ -1,6 +1,10 @@
 #%%
 import itertools
+from typing import Tuple
+import os
+import numpy as np
 import argparse
+import time
 import transformers
 import trl
 import datasets
@@ -12,6 +16,7 @@ import trl.gpt2
 import trl.ppo
 
 from rhyme_finetuning.rhyming import stanza_rhymes
+from rhyme_finetuning.predict import get_samples, return_four_lines
 
 def process_line(line: str) -> str:
     """
@@ -31,7 +36,7 @@ def process_line(line: str) -> str:
         return ""
     return line
 
-def reward(query: str, response: str, c_lines: float = 1.0, c_repetitions = 4.0, debug: bool = False) -> float:
+def reward(query: str, response: str, c_lines: float = 1.0, c_repetitions = 4.0, debug: bool = False) -> Tuple[float, int, int, int]:
     """Reward function for the RL agent."""
     stanza = query + response
     lines = stanza.splitlines()
@@ -46,7 +51,9 @@ def reward(query: str, response: str, c_lines: float = 1.0, c_repetitions = 4.0,
     # line_penalty has to be squared because num_rhymes can grow quadratically with num_lines
     if debug:
         print(f"num_lines: {num_lines}, num_rhymes: {num_rhymes}, num_repetitions: {num_repetitions}, line_penalty: {line_penalty}")
-    return num_rhymes - c_lines * line_penalty ** 2 - c_repetitions * num_repetitions
+    reward = num_rhymes - c_lines * line_penalty ** 2 - c_repetitions * num_repetitions
+
+    return reward, num_rhymes, line_penalty, num_repetitions
 #%%
 def get_queries(data_file: str):
     """Get queries for the RL agent."""
@@ -64,17 +71,16 @@ def get_queries(data_file: str):
 
 #%%
 
-
 def collater(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 def train(args):
 
     config = {
-        "steps": 20000,
+        "steps": args.steps,
         "batch_size": args.batch_size,
-        "forward_batch_size": 16,
-        "ppo_epochs": 4,   
+        "forward_batch_size": args.forward_batch_size,
+        "ppo_epochs": args.ppo_epochs,
         # "txt_in_min_len": 2,
         # "txt_in_max_len": 8,
         # "txt_out_min_len": 4,
@@ -89,11 +95,19 @@ def train(args):
         "cliprange_value":.2,
         "vf_coef":.1, 
     }
+
+    if not args.no_track:
+        wandb.init(
+            entity="rhyme_finetuning",
+            project="rl",
+            config=config,
+        )
     device = "cuda" if t.cuda.is_available() else "cpu"
     tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2", padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
-    model = trl.gpt2.GPT2HeadWithValueModel.from_pretrained(args.checkpoint).to(device)
-    model_ref = trl.gpt2.GPT2HeadWithValueModel.from_pretrained(args.checkpoint).to(device)
+    checkpoint = args.checkpoint if args.checkpoint else args.reference_checkpoint
+    model = trl.gpt2.GPT2HeadWithValueModel.from_pretrained(checkpoint).to(device)
+    model_ref = trl.gpt2.GPT2HeadWithValueModel.from_pretrained(args.reference_checkpoint).to(device)
     ppo_trainer = trl.ppo.PPOTrainer(model, model_ref, tokenizer, **config)
     queries = get_queries(args.query_file)
     tokenized_dataset = queries.map(
@@ -109,31 +123,97 @@ def train(args):
         "max_new_tokens": 40,
     }
     dataloader = t.utils.data.DataLoader(tokenized_dataset["train"], batch_size=args.batch_size, collate_fn=collater)
+    table = wandb.Table(columns=["Query", "Response", "Reward"])
     for i, batch in enumerate(tqdm(dataloader)):
+        timing = {}
+        t_epoch = time.time()
         response_tensors = []
         query_tensors = t.tensor([query["input_ids"] for query in batch["tokens"]]).long().to(device)
+        t0 = time.time()
         response_tensors = model.generate(query_tensors, **gen_kwargs)
         response_tensors = response_tensors[:, query_tensors.shape[1]:]
-        # response = t.cat((response, t.full((gen_kwargs["max_new_tokens"] - len(response), ), tokenizer.eos_token_id, dtype=t.long, device=device)))
 
         response_strs = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+        timing['time/get_responses'] = time.time() - t0
 
-        rewards = t.tensor([reward(query, response) for query, response in zip(batch["query"], response_strs)]).to(device)
+        t0 = time.time()
+        rewards, num_rhymes, line_penalties, num_repetitions = zip(*[reward(query, response) for query, response in zip(batch["query"], response_strs)])
+        rewards = t.tensor(rewards).to(device)
+        timing['time/get_rewards'] = time.time() - t0
         
         #### Run PPO step 
+        t0 = time.time()
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-        print(stats)
+        timing['time/optimization'] = time.time() - t0
+
+        timing['time/epoch'] = time.time() - t_epoch
+
+        if not args.no_track:
+            t0 = time.time()
+            for row in zip(batch['query'], response_strs, rewards.cpu().tolist()):
+                table.add_data(*row)
+            logs = {}
+            stats_keys = [
+                "objective/kl", "ppo/policy/entropy"
+            ]
+            logs.update({k: v for k, v in stats.items() if k in stats_keys})
+            logs.update(timing)
+            logs['env/reward_mean'] = t.mean(rewards).cpu().numpy()
+            logs['env/reward_std'] = t.std(rewards).cpu().numpy()
+            # logs['env/reward_dist'] = rewards.cpu().numpy()
+            logs['env/num_rhymes_mean'] = np.mean(num_rhymes)
+            logs['env/num_rhymes_std'] = np.std(num_rhymes)
+            # logs['env/num_rhymes_dist'] = num_rhymes
+            logs['env/line_penalty_mean'] = np.mean(line_penalties)
+            logs['env/line_penalty_std'] = np.std(line_penalties)
+            # logs['env/line_penalties_dist'] = line_penalties
+            logs['env/num_repetitions_mean'] = np.mean(num_repetitions)
+            logs['env/num_repetitions_std'] = np.std(num_repetitions)
+            # logs['env/num_repetitions_dist'] = num_repetitions
+
+            # Generate a few samples from the model
+            texts = get_samples(model, tokenizer, gen_kwargs, device)
+            texts = [text.split('\n') for text in texts]
+            processed_texts = [[process_line(line) for line in text] for text in texts]
+
+            rhymes = [str(stanza_rhymes(text)) if len(
+                text) == 4 and None not in text else 'not 4' for text in processed_texts]
+            
+            for text, rhyme in zip(texts, rhymes):
+                print("\n".join(text))
+                print(rhyme)
+
+            wandb.log(logs)
+
+            print(f"Logging took {time.time() - t0} seconds")
+
+        if (i + 1) % args.save_every == 0:
+            model.save_pretrained(os.path.join(args.output_dir, f"checkpoint_{i+1}"))
+            tokenizer.save_pretrained(os.path.join(args.output_dir, f"checkpoint_{i+1}"))
+
+    wandb.log("examples", table)
+    model.save_pretrained(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
 #%%
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-track", action="store_true")
-    parser.add_argument("--checkpoint", type=str, default="./output/supervised_eos/checkpoint-209")
+    parser.add_argument("--checkpoint", type=str, default=None, optional=True)
+    parser.add_argument("--reference-checkpoint", type=str, default="./output/supervised_eos/checkpoint-209")
     parser.add_argument("--query-file", type=str, default="./data/stanzas.txt")
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--forward-batch-size", type=int, default=16)
+    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--output-dir", type=str, default="./output/rl")
+    parser.add_argument("--save-every", type=int, default=10)
+    parser.add_argument("--steps", type=int, default=20_000)
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
-    train(args)
 
-    
-# %%
-reward("Three rings for the elven kings high under the sky\n", "Nine for mortal men doomed to die\n die \n die\n die", debug=True)
+    if args.debug:
+        args.batch_size = 2
+        args.forward_batch_size = 2
+        args.steps = 10
+        args.ppo_epochs = 1
+    train(args)
