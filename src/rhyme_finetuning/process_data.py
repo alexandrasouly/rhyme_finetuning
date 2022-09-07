@@ -1,11 +1,15 @@
 # %%
+import copy
 from dataclasses import asdict, dataclass
+import math
 import pickle
-from typing import Callable, List, Optional
+from typing import List, Optional
 import torch as t
 from pathlib import Path
 from tqdm import tqdm
 from lingua import Language, LanguageDetectorBuilder
+from rhyme_finetuning.rhyming import stanza_rhymes
+from torch.utils.data import random_split
 
 
 @dataclass
@@ -31,7 +35,7 @@ class Stanza:
 def process_line(line: str, strict: bool = False) -> Optional[str]:
     """
     Remove all but allowed characters. Returns None if line is invalid.
-    If strict, we strip everything except ascii alphanumeric characters. The line can't end in a number.
+    If strict, we strip everything from the end except ascii alphanumeric characters. The line can't end in a number.
     If not strict, we allow common punctuation as well. The line can end in a number.
     Both filters out copyright lines
     """
@@ -52,23 +56,28 @@ def process_line(line: str, strict: bool = False) -> Optional[str]:
 
 def stanzas_from_poem(poem: Poem) -> List[Stanza]:
     '''
-    Make processed stanzas from a poem.
+    Make processed stanzas from a poem. Only keep the ones that rhyme.
 
     If a line would be None when strictly filtered, we just get rid of it.
     '''
     processed_stanzas = []
     punctuated_lines = [process_line(line) for line in poem.text.splitlines(
     ) if process_line(line, strict=True) is not None]
+    strict_lines = [process_line(line, strict=True) for line in poem.text.splitlines(
+    ) if process_line(line, strict=True) is not None]
     assert all(line is not None for line in punctuated_lines)
+    assert all(line is not None for line in strict_lines)
 
     # Put processed lines into stanzas of length 4 each:
     for i in range(0, len(punctuated_lines)):
         # Skip incomplete stanzas
         if i + 4 > len(punctuated_lines):
             continue
-        text = "\n".join(punctuated_lines[i:i+4])
-        processed_stanzas.append(
-            Stanza(poem_title=poem.title, text=text, form=poem.form))
+        if stanza_rhymes(strict_lines[i:i+4]):
+            text = "\n".join(punctuated_lines[i:i+4])
+            processed_stanzas.append(
+                Stanza(poem_title=poem.title, text=text, form=poem.form))
+    return processed_stanzas
 
 
 def load_poems_from_file(data_folder) -> List[Poem]:
@@ -112,8 +121,12 @@ class PoemsDataset(t.utils.data.Dataset):
     def __init__(
         self,
         data_folder: str = "data/poems",
+        stanzas=None
     ):
-        self.stanzas = []
+        if stanzas is None:
+            self.stanzas = []
+        else:
+            self.stanzas = copy.deepcopy(stanzas)
 
         poems = load_poems_from_file(data_folder)
         stanzas = process_all_poems(poems)
@@ -142,16 +155,23 @@ class PoemsDataset(t.utils.data.Dataset):
         dataset = cls.__new__(cls)
         dataset.stanzas = [Stanza(**stanza) for stanza in stanzas]
         return dataset
+
+
 # %%
-
-
 if __name__ == '__main__':
+    raise ValueError(
+        'Comment in this warning to run the script to re-process data. WARNING: it will overwrite your existing data and takes ~10 mins.')
+
     dataset = PoemsDataset()
-    dataset.save_plaintext('data/processed_stanzas.txt')
-
-
-# %%
-# dataset = PoemsDataset("../../data/poems")
-
-
-# %%
+    dataset.save('data/stanzas.pkl')
+    dataset.save_plaintext('data/stanzas.txt')
+    train_set, test_set = random_split(dataset, [math.floor(
+        0.8*len(dataset)), math.floor(0.2*len(dataset))])
+    with open('data/stanzas_test.txt', "w") as f:
+        for stanza in test_set:
+            f.write(stanza.text)
+            f.write("\n\n")
+    with open('data/stanzas_train.txt', "w") as f:
+        for stanza in train_set:
+            f.write(stanza.text)
+            f.write("\n\n")
