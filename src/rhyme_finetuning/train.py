@@ -5,6 +5,7 @@ from rhyme_finetuning.predict import return_four_lines
 from rhyme_finetuning.process_data import process_line
 from rhyme_finetuning.rhyming import stanza_rhymes
 import transformers
+from tokenizers.processors import TemplateProcessing
 
 # %%
 
@@ -17,6 +18,14 @@ def train(args):
         sample_by="paragraph",
     )
     tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+    # Add an EOS token at the end of each sample
+    template = TemplateProcessing(
+        single=f"$A {tokenizer.eos_token}",
+        special_tokens=[(f"{tokenizer.eos_token}", tokenizer.eos_token_id)],
+    )
+    tokenizer.post_processor = template
+    tokenizer._tokenizer.post_processor = template
     # Dataset is made up of Stanzas, which store poems in text
     tokenized_dataset = dataset.map(
         lambda examples: tokenizer(examples["text"]),
@@ -24,19 +33,13 @@ def train(args):
         num_proc=4,
         remove_columns=["text"],
     )
-    # Tokenised dataset is made up of dicts
-    # with keys input_ids and attention_masks
-    tokenizer.pad_token = tokenizer.eos_token
-    # Add an EOS token at the end of each sample
-    tokenized_dataset = tokenized_dataset.map(
-        lambda example: {"input_ids": example["input_ids"] + [tokenizer.eos_token_id],
-                         "attention_mask": example["attention_mask"] + [1]},
-    )
+
     # quick check first and last example have eos at the end and attention mask len is fine
     assert tokenized_dataset['train'][-1]['input_ids'][-1] == tokenizer.eos_token_id
     assert tokenized_dataset['train'][0]['input_ids'][-1] == tokenizer.eos_token_id
     assert len(tokenized_dataset['train'][0]['input_ids']) == len(
         tokenized_dataset['train'][0]['attention_mask'])
+    assert tokenized_dataset['train'][0]['attention_mask'][-1] == 1
     data_collator = transformers.DataCollatorForLanguageModeling(
         tokenizer, mlm=False)
     trainer_args = transformers.TrainingArguments(
