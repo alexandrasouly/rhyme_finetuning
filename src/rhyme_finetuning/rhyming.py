@@ -1,7 +1,7 @@
 from typing import Any, Callable, List
 import nltk
 from itertools import dropwhile
-'''Credit to https://github.com/diego-vicente/dandelion for the logic'''
+'''Credit to https://github.com/diego-vicente/dandelion for parts of the logic'''
 
 nltk.download('cmudict')
 pronounciation = dict(nltk.corpus.cmudict.entries())
@@ -53,11 +53,14 @@ def stanza_rhymes(lines: List[str]) -> bool:
     Two lines: checks if AA
     Four lines: checks if ABBA, ABAB, AABB or AAAA.
     """
+    for line in lines:
+        assert line[-1].isalpha()
     if not ((len(lines) == 4) or (len(lines) == 2)):
         raise RuntimeError(
             f'number of lines is not 2 or 4a')
-    last_words = [line.split(' ')[-1] for line in lines]
-    assert '' not in last_words and None not in last_words
+    last_words = [line.rstrip().split(' ')[-1] for line in lines]
+    if '' in last_words or None in last_words:
+        return False
     if len(last_words) == 2:
         return vowel_rhyme(last_words[0], last_words[1])
     elif len(last_words) == 4:

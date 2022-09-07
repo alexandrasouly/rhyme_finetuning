@@ -6,7 +6,7 @@ import pronouncing
 
 import time
 
-with open('benchmark.txt') as file:
+with open('rhyming_benchmark_data.txt') as file:
     lines = file.readlines()
     lines = [line.rstrip() for line in lines]
 
