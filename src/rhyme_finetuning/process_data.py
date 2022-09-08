@@ -53,6 +53,10 @@ def process_line(line: str, strict: bool = False) -> Optional[str]:
             return None
     return line
 
+def process_line_return_empty(line: str, strict: bool = False) -> str:
+    processed = process_line(line, strict)
+    return processed if processed is not None else ""
+
 
 def stanzas_from_poem(poem: Poem) -> List[Stanza]:
     '''

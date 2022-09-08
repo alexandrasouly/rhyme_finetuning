@@ -84,26 +84,25 @@ def train(args):
 class CustomWandbCallback(transformers.integrations.WandbCallback):
     def __init__(self) -> None:
         super().__init__()
+        # no eos postprocessing here
         self.tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
-        self.table = self._wandb.Table(columns=['text', 'rhymes'])
+        self.table = self._wandb.Table(columns=['text', 'rhymes', 'eos_prob'])
 
     def on_evaluate(self, args, state, control, model=None, **kwargs):
-        '''We sample some 4 lines based on hardcoded prompts and check if they rhyme'''
+        '''We sample some 4 lines based on hardcoded prompts and check if they rhyme, and how likely eos probs was'''
         super().on_evaluate(args, state, control, model=model, **kwargs)
         assert model is not None
 
-        pipe = transformers.pipeline(
-            model=model, task='text-generation', tokenizer=self.tokenizer, device=0)
-        texts = list(return_four_lines(pipe))
+        texts, eos_probs = return_four_lines(model, self.tokenizer)
         texts = [text.split('\n') for text in texts]
         processed_texts = [[process_line(line, strict=True)
                             for line in text] for text in texts]
 
         rhymes = [str(stanza_rhymes(text)) if len(
-            text) == 4 and None not in text else 'not 4' for text in processed_texts]
+            text) == 4 and None not in text else 'less than 4' for text in processed_texts]
 
-        for log_text, log_rhyme in zip(texts, rhymes):
-            self.table.add_data(log_text, log_rhyme)
+        for log_text, log_rhyme, eos_prob in zip(texts, rhymes, eos_probs):
+            self.table.add_data(log_text, log_rhyme, eos_prob)
 
 
 # %%
@@ -115,10 +114,10 @@ if __name__ == "__main__":
                         default="data/stanzas_test.txt")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--no-track", action="store_true")
     parser.add_argument("--output-dir", type=str,
-                        default="output/supervised_eos2")
+                        default="output/supervised_eos_10_epoch")
     args = parser.parse_args()
 
     train(args)
