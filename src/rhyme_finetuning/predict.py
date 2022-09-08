@@ -59,11 +59,13 @@ def get_samples(model, tokenizer, gen_kwargs, device):
     return response_strs
 
 #%%
-def sample(prompt, model, tokenizer, gen_kwargs, device, rejection=True, batch_size=16, max_steps=1000):
+def sample(prompt, model, tokenizer, gen_kwargs, device, rejection=True, allow_repeats=False, rhyme_with=-1, batch_size=128, max_steps=750):
     """Generate a response using rejection sampling."""
     # While the response doesn't rhyme, sample a new batch:
     if not rejection:
         batch_size = 1
+    
+    n_prompt_lines = len(prompt.split('\n'))
     for _ in range(max_steps // batch_size):
         if not prompt.endswith("\n"):
             prompt = prompt + "\n"
@@ -73,19 +75,51 @@ def sample(prompt, model, tokenizer, gen_kwargs, device, rejection=True, batch_s
         response_strs = [tokenizer.decode(r) for r in response_tensors]
 
         for response in response_strs:
-            first_line, second_line = response.split("\n")[-2:]
+            lines = response.split("\n")
+            # Line the new one should rhyme with:
+            first_line = lines[n_prompt_lines + rhyme_with]
+            # New line:
+            second_line = lines[n_prompt_lines]
             processed_first_line, processed_second_line = process_line_return_empty(first_line, strict=True), process_line_return_empty(second_line, strict=True)
+            if not allow_repeats:
+                first_line_end = processed_first_line.split(" ")[-1]
+                second_line_end = processed_second_line.split(" ")[-1]
+                if first_line_end.lower() == second_line_end.lower():
+                    continue
             if not rejection:
                 return second_line
             if stanza_rhymes([processed_first_line, processed_second_line]):
                 return second_line
+    return second_line
+            
+GEN_KWARGS = {
+    "min_length":-1,
+    "top_k": 0.0,
+    # "top_p": 1.0,
+    "do_sample": True,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "no_repeat_ngram_size": 2,
+    "max_new_tokens": 40,
+}
 
-def complete_stanza(prompt, model, tokenizer, gen_kwargs, device):
+def complete_stanza(prompt, model, tokenizer=None, gen_kwargs=GEN_KWARGS, device=None, schema="aabb"):
+    prompt = prompt.rstrip("\n")
+    if tokenizer is None:
+        tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2")
+    if device is None:
+        device = next(model.parameters()).device
     stanza = [prompt]
-    stanza.append(sample(prompt, model, tokenizer, gen_kwargs, device))
-    stanza.append(sample("\n".join(stanza), model, tokenizer, gen_kwargs, device, rejection=False))
-    stanza.append(sample("\n".join(stanza), model, tokenizer, gen_kwargs, device))
+    if schema == "aabb":
+        stanza.append(sample(prompt, model, tokenizer, gen_kwargs, device))
+        stanza.append(sample("\n".join(stanza), model, tokenizer, gen_kwargs, device, rejection=False))
+        stanza.append(sample("\n".join(stanza), model, tokenizer, gen_kwargs, device))
+    elif schema == "abab":
+        stanza.append(sample(prompt, model, tokenizer, gen_kwargs, device, rejection=False))
+        stanza.append(sample("\n".join(stanza), model, tokenizer, gen_kwargs, device, rhyme_with=-2))
+        stanza.append(sample("\n".join(stanza), model, tokenizer, gen_kwargs, device, rhyme_with=-2))
     return "\n".join(stanza)
+
 #%%
 if __name__ == "__main__":
     device = t.device("cuda" if t.cuda.is_available() else "cpu")
