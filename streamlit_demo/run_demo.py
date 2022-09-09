@@ -1,8 +1,5 @@
-import os
-import pwd
+
 import streamlit as st
-import pandas as pd
-import numpy as np
 import transformers
 from rhyme_finetuning.predict import complete_stanza
 from PIL import Image
@@ -14,8 +11,8 @@ st.set_page_config(layout="wide")
 @st.cache
 def load_images():
     rej_sample_img = Image.open(
-        '/home/ubuntu/rhyme_finetuning/streamlit_demo/rejection_sampling.png')
-    rl_img = Image.open('/home/ubuntu/rhyme_finetuning/streamlit_demo/rl.png')
+        'streamlit_demo/rejection_sampling.png')
+    rl_img = Image.open('streamlit_demo/rl.png')
     return rl_img, rej_sample_img
 
 

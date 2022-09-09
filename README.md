@@ -7,8 +7,11 @@ Full project report can be found at [Project report](MLAB_project_summary.pdf)
 
 We have created a web interface for poem generation using Streamlit, which allows a user to generate a poem from a prompt using GPT-2, our self-supervised fine-tuned rejection sampling model, and our RL model. Only the second model produces real poetry, but the other two provide entertaining comparisons. 
 
-To play around with the web interface, run:  
-`pip install streamlit`  
+** WEB INTERFACE WILL BE USABLE IN A FEW DAYS ** 
+To play around with the web interface, run:
+install a Rust toolchain with `curl https://sh.rustup.rs -sSf | sh` and restart your IDE   
+`pip install -r requirements.txt`
+`pip install .`
 `streamlit run streamlit_demo/run_demo.py`
 
 and open the URL that shows up in the terminal in a web browser.
