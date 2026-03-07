@@ -1,6 +1,9 @@
+README.md
 setup.cfg
 setup.py
 src/rhyme_finetuning/__init__.py
+src/rhyme_finetuning/debug_model.py
+src/rhyme_finetuning/eval.py
 src/rhyme_finetuning/predict.py
 src/rhyme_finetuning/process_data.py
 src/rhyme_finetuning/rhyming.py
